@@ -1,0 +1,7 @@
+[settings]
+env_shell_expand = false
+
+[env]
+NEXTCLOUD_ADMIN_USER = "kot"
+NEXTCLOUD_DB_PASSWORD = "o3kz3Ddmb4QNu7T9qliB20BvgXqPhFXhqGnjYtboVAo="
+NEXTCLOUD_ADMIN_PASSWORD = "/v6fyfcaQZzErfUZ7t+k9bzmOg2Hf9Fuge8HvLdSmOk="

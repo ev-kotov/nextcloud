@@ -1,0 +1,10 @@
+mise.local.toml
+
+# Nextcloud (создаётся автоматически при первом запуске)
+app/
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

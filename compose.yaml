@@ -1,0 +1,95 @@
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine
+    container_name: nextcloud-db
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+    environment:
+      POSTGRES_DB: ${NEXTCLOUD_DB_NAME}
+      POSTGRES_USER: ${NEXTCLOUD_DB_USER}
+      POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+    volumes:
+      - nextcloud-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NEXTCLOUD_DB_USER} -d ${NEXTCLOUD_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: docker.io/library/redis:alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+    volumes:
+      - nextcloud-redis-data:/data
+
+  app:
+    image: docker.io/library/nextcloud:fpm-alpine
+    container_name: nextcloud-app
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      REDIS_HOST: ${NEXTCLOUD_REDIS_HOST}
+      REDIS_HOST_PORT: ${NEXTCLOUD_REDIS_PORT}
+      EXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS}
+      OVERWRITEPROTOCOL: https
+      OVERWRITECLIURL: ${NEXTCLOUD_OVERWRITE_CLI_URL}
+      TRUSTED_PROXIES: 172.16.0.0/12
+      NEXTCLOUD_DATA_DIR: /var/www/html/data
+    volumes:
+      - /opt/stacks/nextcloud/app:/var/www/html:z
+      - /srv/nextcloud/data:/var/www/html/data:z
+
+  cron:
+    image: docker.io/library/nextcloud:fpm-alpine
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+    depends_on:
+      - app
+    entrypoint: /cron.sh
+    volumes:
+      - /opt/stacks/nextcloud/app:/var/www/html:z
+      - /srv/nextcloud/data:/var/www/html/data:z
+
+  nginx:
+    image: docker.io/library/nginx:alpine
+    container_name: nextcloud-nginx
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+      - traefik-public
+    depends_on:
+      - app
+    volumes:
+      - /opt/stacks/nextcloud/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/stacks/nextcloud/app:/var/www/html:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nextcloud.rule=Host(`nextcloud.standcat.ru`)"
+      - "traefik.http.routers.nextcloud.entrypoints=websecure"
+      - "traefik.http.routers.nextcloud.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nextcloud.loadbalancer.server.port=80"
+
+volumes:
+  nextcloud-redis-data:
+  nextcloud-db-data:
+
+networks:
+  nextcloud-internal:
+    external: true
+    name: nextcloud-internal
+  traefik-public:
+    external: true
+    name: traefik-public
