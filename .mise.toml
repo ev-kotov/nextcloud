@@ -11,19 +11,14 @@ NEXTCLOUD_REDIS_HOST = "redis"
 NEXTCLOUD_REDIS_PORT = "6379"
 
 NEXTCLOUD_TRUSTED_DOMAINS = "nextcloud.standcat.ru"
-NEXTCLOUD_OVERWRITE_CLI_URL = "https://standcat.ru"
+NEXTCLOUD_OVERWRITE_CLI_URL = "https://nextcloud.standcat.ru" # Исправлено на целевой поддомен
 
 NEXTCLOUD_STACK_DIR = "/opt/stacks/nextcloud"
 NEXTCLOUD_SRV_DIR = "/srv/nextcloud"
 
-# Секреты администратора и БД
-NEXTCLOUD_ADMIN_USER = "kot"
-NEXTCLOUD_DB_PASSWORD = "o3kz3Ddmb4QNu7T9qliB20BvgXqPhFXhqGnjYtboVAo="
-NEXTCLOUD_ADMIN_PASSWORD = "/v6fyfcaQZzErfUZ7t+k9bzmOg2Hf9Fuge8HvLdSmOk="
-
 
 [tasks."prepare:deps"]
-description = "[Шаг 1.1] Проверить и установить системные зависимости на хосте"
+description = "Проверить и установить системные зависимости на хосте"
 raw = true
 run = '''
 set -euo pipefail
@@ -40,7 +35,7 @@ fi
 '''
 
 [tasks."prepare:dirs"]
-description = "[Шаг 1.2] Создать директории стека на хосте"
+description = "Создать директории стека на хосте"
 raw = true
 run = '''
 set -euo pipefail
@@ -50,7 +45,7 @@ echo "Директории на хосте созданы."
 '''
 
 [tasks."prepare:ownership"]
-description = "[Шаг 1.3] Выставить владельцев под UID контейнеров (Rootless www-data: 82)"
+description = "Выставить владельцев под UID контейнеров (Rootless www-data: 82)"
 raw = true
 run = '''
 set -euo pipefail
@@ -62,7 +57,7 @@ echo "Права доступа настроены под Rootless Podman."
 '''
 
 [tasks."prepare:selinux"]
-description = "[Шаг 1.4] Установить SELinux-контекст container_file_t"
+description = "Установить SELinux-контекст container_file_t"
 raw = true
 run = '''
 set -euo pipefail
@@ -74,7 +69,7 @@ echo "SELinux-контексты обновлены."
 '''
 
 [tasks."prepare:networks"]
-description = "[Шаг 1.5] Создать Podman-сети для стека и прокси"
+description = "Создать Podman-сети для стека и прокси"
 run = '''
 set -euo pipefail
 podman network exists traefik-public || podman network create traefik-public
@@ -83,7 +78,7 @@ echo "Сети готовы."
 '''
 
 [tasks."prepare"]
-description = "[Шаг 1] Полная подготовка хоста (запуск всех подзадач prepare)"
+description = "Полная подготовка хоста (запуск всех подзадач prepare)"
 depends = [
     "prepare:deps", 
     "prepare:dirs", 
@@ -93,10 +88,8 @@ depends = [
 ]
 run = "echo 'Хост успешно подготовлен к запуску стека.'"
 
-# ПРОДАКШЕН И НАСТРОЙКА
-
 [tasks."prod:up"]
-description = "[Шаг 2] Запустить стек контейнеров через podman-compose"
+description = "Запустить стек контейнеров через podman-compose"
 dir = "{{env.NEXTCLOUD_STACK_DIR}}"
 run = '''
 set -euo pipefail
@@ -106,7 +99,7 @@ echo "Контейнеры запущены. Сценарии автоустан
 '''
 
 [tasks."prod:db-init"]
-description = "[Шаг 3] Ожидание СУБД и принудительное создание чистой базы данных"
+description = "Ожидание СУБД, пересоздание чистой базы данных и контролируемая инсталляция таблиц Nextcloud"
 run = '''
 set -euo pipefail
 echo "Ожидание запуска PostgreSQL..."
@@ -117,13 +110,8 @@ done
 echo "Принудительное пересоздание абсолютно чистой базы данных..."
 podman exec nextcloud-db dropdb -U postgres "${NEXTCLOUD_DB_NAME}" --if-exists 2>/dev/null || true
 podman exec nextcloud-db createdb -U postgres "${NEXTCLOUD_DB_NAME}"
-echo "Кристально чистая база данных создана под суперпользователем postgres."
-'''
+echo "Чистая база данных создана под суперпользователем postgres."
 
-[tasks."prod:install"]
-description = "[Шаг 4] Контролируемая ручная инсталляция таблиц Nextcloud"
-run = '''
-set -euo pipefail
 echo "Ожидание готовности контейнера приложения..."
 until podman exec nextcloud-app [ -f /var/www/html/occ ] >/dev/null 2>&1; do
   sleep 2
@@ -134,15 +122,15 @@ podman exec --user www-data nextcloud-app php occ maintenance:install \
   --database="pgsql" \
   --database-name="${NEXTCLOUD_DB_NAME}" \
   --database-host="${NEXTCLOUD_DB_HOST}" \
-  --database-user="postgres" \
+  --database-user="${NEXTCLOUD_DB_USER}" \
   --database-pass="${NEXTCLOUD_DB_PASSWORD}" \
   --admin-user="${NEXTCLOUD_ADMIN_USER}" \
   --admin-pass="${NEXTCLOUD_ADMIN_PASSWORD}"
-echo "[OK] Nextcloud успешно установил все таблицы!"
+echo "Nextcloud успешно установил все таблицы!"
 '''
 
-[tasks."prod:configure"]
-description = "[Шаг 5] Финальная настройка параметров (trusted_domains, proxies)"
+[tasks."prod:db-configure"]
+description = "Финальная настройка параметров (trusted_domains, proxies, Redis cache)"
 run = '''
 set -euo pipefail
 echo "Конфигурация trusted_proxies (подсети Podman)..."
@@ -151,11 +139,16 @@ podman exec --user www-data nextcloud-app php occ config:system:set trusted_prox
 podman exec --user www-data nextcloud-app php occ config:system:set trusted_domains 1 --value="${NEXTCLOUD_TRUSTED_DOMAINS}"
 podman exec --user www-data nextcloud-app php occ config:system:set overwriteprotocol --value="https"
 
+echo "Конфигурация кэширования и блокировок файлов через Redis..."
+podman exec --user www-data nextcloud-app php occ config:system:set memcache.local --value="\\OC\\Memcache\\Redis"
+podman exec --user www-data nextcloud-app php occ config:system:set memcache.distributed --value="\\OC\\Memcache\\Redis"
+podman exec --user www-data nextcloud-app php occ config:system:set memcache.locking --value="\\OC\\Memcache\\Redis"
+podman exec --user www-data nextcloud-app php occ config:system:set redis host --value="redis"
+podman exec --user www-data nextcloud-app php occ config:system:set redis port --value="6379" --type=integer
+
 echo "Текущий статус приложения:"
 podman exec --user www-data nextcloud-app php occ status
-echo "============================================================="
 echo "Стек полностью развернут, настроен и готов к работе!"
-echo "============================================================="
 '''
 
 [tasks."prod:down"]
@@ -163,31 +156,23 @@ description = "Остановить стек контейнеров"
 dir = "{{env.NEXTCLOUD_STACK_DIR}}"
 run = "podman-compose down"
 
-[tasks."prod:purge-data"]
-description = "РАДИКАЛЬНОЕ УНИЧТОЖЕНИЕ: Полное удаление ВСЕХ файлов и томов баз данных с хоста"
-run = '''
-set -euo pipefail
-echo "ВНИМАНИЕ! Уничтожаю именованные тома Podman для БД..."
-podman volume rm $(podman volume ls -q | grep nextcloud) 2>/dev/null || true
-echo "Удаляю локальные файлы Nextcloud с хоста..."
-sudo rm -rf ${NEXTCLOUD_SRV_DIR}/data
-sudo rm -rf ${NEXTCLOUD_STACK_DIR}/app/*
-echo "[УНИЧТОЖЕНО] Все тома и файлы полностью стерты."
-'''
-
 [tasks."prod:clean"]
-description = "БЕЗОПАСНАЯ ОЧИСТКА: Удалить контейнеры, кэш Podman и ТОЛЬКО код приложения"
+description = "Безопасная очистка: удалить контейнеры, кэш Podman и только код приложения (сохраняя конфигурацию)"
 dir = "{{env.NEXTCLOUD_STACK_DIR}}"
 run = '''
 set -euo pipefail
 podman-compose down 2>/dev/null || true
 podman rm -f nextcloud-db nextcloud-redis nextcloud-app nextcloud-cron nextcloud-nginx 2>/dev/null || true
 sudo rm -f /var/lib/cni/networks/nextcloud-internal/* 2>/dev/null || true
-echo "Удаляю только кэш кода приложения Nextcloud..."
-sudo rm -rf ${NEXTCLOUD_STACK_DIR}/app/*
+
+echo "Удаляю файлы кода Nextcloud, бережно сохраняя папку config..."
+# Находим и удаляем всё в папке app, кроме подпапки config
+find ${NEXTCLOUD_STACK_DIR}/app -mindepth 1 -maxdepth 1 ! -name 'config' -exec sudo rm -rf {} +
+
 podman system prune -f
-echo "[БЕЗОПАСНО] Контейнеры и конфиги стерты. База данных и файлы пользователей НЕ тронуты."
+echo "Контейнеры и код стерты. config.php, база данных и файлы пользователей сохранены."
 '''
+
 
 [tasks."logs:all"]
 description = "Посмотреть общие логи стека"
